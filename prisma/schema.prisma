@@ -1,5 +1,5 @@
 // SONORA Prisma Schema - Universal Music Library
-// Phase 1: Foundation Models (User & Session)
+// Phase 2: Canonical Library, Provider Foundations & Durable Outbox
 // Database provider: PostgreSQL
 
 generator client {
@@ -11,14 +11,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ---------------------------------------------------------------------------
+// Identity & Session Security
+// ---------------------------------------------------------------------------
+
 model User {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  displayName  String?
-  passwordHash String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  sessions     Session[]
+  id               String             @id @default(uuid())
+  email            String             @unique
+  displayName      String?
+  passwordHash     String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  sessions         Session[]
+  library          Library?
+  playlists        Playlist[]
+  providerAccounts ProviderAccount[]
+  providerPlaylists ProviderPlaylist[]
+  syncJobs         SyncJob[]
+  syncRules        SyncRule[]
+  snapshots        LibrarySnapshot[]
+  verifiedMatches  TrackMatch[]       @relation("UserVerifiedMatches")
 
   @@map("users")
 }
@@ -34,4 +46,484 @@ model Session {
   @@index([userId])
   @@index([tokenHash])
   @@map("sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Provider Accounts & Connections
+// ---------------------------------------------------------------------------
+
+enum ProviderType {
+  SPOTIFY
+  APPLE_MUSIC
+  YOUTUBE_MUSIC
+}
+
+enum ProviderAccountStatus {
+  CONNECTED
+  EXPIRED
+  REVOKED
+  DISCONNECTED
+}
+
+model ProviderAccount {
+  id                     String                @id @default(uuid())
+  userId                 String
+  provider               ProviderType
+  providerUserId         String
+  displayName            String
+  email                  String?
+  encryptedAccessToken   String
+  encryptedRefreshToken  String?
+  tokenExpiresAt         DateTime?
+  scopes                 String[]              @default([])
+  status                 ProviderAccountStatus @default(CONNECTED)
+  metadata               Json?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerTracks         ProviderTrack[]
+  providerPlaylists      ProviderPlaylist[]
+  libraryItems           ProviderLibraryItem[]
+
+  @@unique([userId, provider, providerUserId])
+  @@unique([id, userId]) // Composite key for cross-tenant foreign key enforcement
+  @@index([userId, provider])
+  @@map("provider_accounts")
+}
+
+// ---------------------------------------------------------------------------
+// Canonical Catalog & User Libraries
+// ---------------------------------------------------------------------------
+
+model Track {
+  id             String          @id @default(uuid())
+  isrc           String?         @unique // Database-level uniqueness for non-null ISRCs
+  title          String
+  artistName     String
+  albumName      String?
+  durationMs     Int
+  explicit       Boolean         @default(false)
+  discNumber     Int             @default(1)
+  trackNumber    Int?
+  needsReview    Boolean         @default(false)
+  conflictReason String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  libraryTracks  LibraryTrack[]
+  playlistItems  PlaylistItem[]
+  providerTracks ProviderTrack[]
+  matches        TrackMatch[]
+
+  @@index([isrc])
+  @@index([title, artistName])
+  @@map("tracks")
+}
+
+model ProviderTrack {
+  id                String           @id @default(uuid())
+  provider          ProviderType
+  externalId        String
+  providerAccountId String?
+  matchedTrackId    String?
+  isrc              String?
+  title             String
+  artistName        String
+  albumName         String?
+  durationMs        Int
+  providerUri       String?
+  rawMetadata       Json?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  providerAccount   ProviderAccount? @relation(fields: [providerAccountId], references: [id], onDelete: SetNull)
+  matchedTrack      Track?           @relation(fields: [matchedTrackId], references: [id], onDelete: SetNull)
+  matches           TrackMatch[]
+
+  @@unique([provider, externalId])
+  @@index([matchedTrackId])
+  @@index([isrc])
+  @@map("provider_tracks")
+}
+
+model Library {
+  id        String            @id @default(uuid())
+  userId    String            @unique
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks    LibraryTrack[]
+  playlists Playlist[]
+  snapshots LibrarySnapshot[]
+
+  @@unique([id, userId]) // Composite key for cross-tenant foreign key enforcement
+  @@map("libraries")
+}
+
+enum LibrarySourceProvenance {
+  MANUAL
+  SPOTIFY_IMPORT
+  APPLE_MUSIC_IMPORT
+  YOUTUBE_MUSIC_IMPORT
+  FILE_IMPORT
+}
+
+model LibraryTrack {
+  id               String                  @id @default(uuid())
+  libraryId        String
+  trackId          String
+  addedAt          DateTime                @default(now())
+  sourceProvenance LibrarySourceProvenance @default(MANUAL)
+  userNotes        String?
+
+  library          Library                 @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  track            Track                   @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@unique([libraryId, trackId])
+  @@index([libraryId, addedAt])
+  @@index([trackId])
+  @@map("library_tracks")
+}
+
+enum ProviderItemType {
+  TRACK
+  ALBUM
+  PLAYLIST
+}
+
+enum ProviderItemStatus {
+  ACTIVE
+  REMOVED
+}
+
+model ProviderLibraryItem {
+  id                String             @id @default(uuid())
+  providerAccountId String
+  itemType          ProviderItemType
+  externalId        String
+  status            ProviderItemStatus @default(ACTIVE)
+  syncedAt          DateTime           @default(now())
+
+  providerAccount   ProviderAccount    @relation(fields: [providerAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([providerAccountId, itemType, externalId])
+  @@index([providerAccountId, status])
+  @@map("provider_library_items")
+}
+
+// ---------------------------------------------------------------------------
+// Playlists & Preserved Ordering
+// ---------------------------------------------------------------------------
+
+model Playlist {
+  id                String             @id @default(uuid())
+  userId            String
+  libraryId         String
+  title             String
+  description       String?
+  isPublic          Boolean            @default(false)
+  deletedAt         DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  library           Library            @relation(fields: [libraryId, userId], references: [id, userId], onDelete: Cascade)
+  items             PlaylistItem[]
+  providerPlaylists ProviderPlaylist[]
+
+  @@unique([id, userId]) // Composite key guaranteeing ownership integrity
+  @@unique([id, libraryId])
+  @@index([libraryId, deletedAt])
+  @@index([userId])
+  @@map("playlists")
+}
+
+model PlaylistItem {
+  id         String   @id @default(uuid())
+  playlistId String
+  trackId    String
+  position   Int
+  addedAt    DateTime @default(now())
+  notes      String?
+
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Restrict)
+
+  @@unique([playlistId, position])
+  @@index([playlistId, position])
+  @@index([trackId])
+  @@map("playlist_items")
+}
+
+enum PlaylistSyncStatus {
+  IN_SYNC
+  PENDING_PUSH
+  PENDING_PULL
+  CONFLICT
+  ERROR
+}
+
+model ProviderPlaylist {
+  id                String             @id @default(uuid())
+  userId            String
+  playlistId        String
+  providerAccountId String
+  externalId        String
+  snapshotId        String?
+  syncStatus        PlaylistSyncStatus @default(IN_SYNC)
+  lastSyncedAt      DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  playlist          Playlist           @relation(fields: [playlistId, userId], references: [id, userId], onDelete: Cascade)
+  providerAccount   ProviderAccount    @relation(fields: [providerAccountId, userId], references: [id, userId], onDelete: Cascade)
+
+  @@unique([providerAccountId, externalId])
+  @@index([playlistId])
+  @@index([userId])
+  @@map("provider_playlists")
+}
+
+// ---------------------------------------------------------------------------
+// Matching & Resolution Audit
+// ---------------------------------------------------------------------------
+
+enum MatchMethod {
+  EXACT_ISRC
+  METADATA_EXACT
+  METADATA_FUZZY
+  MANUAL_OVERRIDE
+}
+
+enum TrackMatchReviewStatus {
+  AUTO_MATCHED
+  NEEDS_REVIEW
+  CONFIRMED
+  REJECTED
+}
+
+model TrackMatch {
+  id                 String                 @id @default(uuid())
+  canonicalTrackId   String
+  providerTrackId    String
+  matchConfidence    Float
+  matchMethod        MatchMethod
+  reviewStatus       TrackMatchReviewStatus @default(AUTO_MATCHED)
+  conflictReason     String?
+  conflictingTrackId String?
+  verifiedByUserId   String?
+  createdAt          DateTime               @default(now())
+
+  canonicalTrack     Track                  @relation(fields: [canonicalTrackId], references: [id], onDelete: Cascade)
+  providerTrack      ProviderTrack          @relation(fields: [providerTrackId], references: [id], onDelete: Cascade)
+  verifiedByUser     User?                  @relation("UserVerifiedMatches", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([canonicalTrackId, providerTrackId])
+  @@index([canonicalTrackId])
+  @@index([providerTrackId])
+  @@index([reviewStatus])
+  @@map("track_matches")
+}
+
+// ---------------------------------------------------------------------------
+// Library Snapshots (Point-in-Time Backups)
+// ---------------------------------------------------------------------------
+
+enum SnapshotTrigger {
+  MANUAL
+  PRE_SYNC
+  SCHEDULED
+}
+
+enum SnapshotItemType {
+  TRACK
+  PLAYLIST
+}
+
+model LibrarySnapshot {
+  id        String                @id @default(uuid())
+  userId    String
+  libraryId String?
+  name      String
+  trigger   SnapshotTrigger       @default(MANUAL)
+  itemCount Int                   @default(0)
+  createdAt DateTime              @default(now())
+
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  library   Library?              @relation(fields: [libraryId, userId], references: [id, userId], onDelete: Cascade)
+  items     LibrarySnapshotItem[]
+
+  @@index([userId, createdAt])
+  @@map("library_snapshots")
+}
+
+model LibrarySnapshotItem {
+  id         String           @id @default(uuid())
+  snapshotId String
+  itemType   SnapshotItemType
+  payload    Json
+  createdAt  DateTime         @default(now())
+
+  snapshot   LibrarySnapshot  @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId, itemType])
+  @@map("library_snapshot_items")
+}
+
+// ---------------------------------------------------------------------------
+// Synchronization, Jobs & Rules
+// ---------------------------------------------------------------------------
+
+enum SyncDirection {
+  ONE_WAY
+  TWO_WAY
+}
+
+enum ConflictPolicy {
+  ADDITIVE_MERGE
+  SOURCE_WINS
+  DESTINATION_WINS
+  MANUAL_REVIEW
+}
+
+model SyncRule {
+  id             String         @id @default(uuid())
+  userId         String
+  name           String
+  sourceProvider ProviderType
+  targetProvider ProviderType
+  direction      SyncDirection  @default(ONE_WAY)
+  conflictPolicy ConflictPolicy @default(ADDITIVE_MERGE)
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sync_rules")
+}
+
+enum SyncJobType {
+  IMPORT
+  EXPORT
+  SYNC_RECONCILE
+  SNAPSHOT_RESTORE
+}
+
+enum SyncJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model SyncJob {
+  id             String          @id @default(uuid())
+  userId         String
+  jobType        SyncJobType
+  sourceProvider String
+  targetProvider String
+  status         SyncJobStatus   @default(QUEUED)
+  totalItems     Int             @default(0)
+  processedItems Int             @default(0)
+  failedItems    Int             @default(0)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime        @default(now())
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  operations     SyncOperation[]
+
+  @@unique([id, userId]) // Composite key for cross-tenant query and relation safety
+  @@index([userId, status])
+  @@map("sync_jobs")
+}
+
+enum SyncOperationAction {
+  CREATED
+  MATCHED
+  SKIPPED
+  FAILED
+  TOMBSTONED
+}
+
+enum SyncOperationStatus {
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+model SyncOperation {
+  id           String              @id @default(uuid())
+  syncJobId    String
+  itemType     String
+  sourceId     String
+  targetId     String?
+  action       SyncOperationAction
+  status       SyncOperationStatus
+  errorMessage String?
+  createdAt    DateTime            @default(now())
+
+  syncJob      SyncJob             @relation(fields: [syncJobId], references: [id], onDelete: Cascade)
+
+  @@index([syncJobId, status])
+  @@map("sync_operations")
+}
+
+// ---------------------------------------------------------------------------
+// Transactional Outbox & Idempotency
+// ---------------------------------------------------------------------------
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+  DEAD_LETTER
+}
+
+model OutboxEvent {
+  id              String       @id @default(uuid())
+  eventType       String
+  payload         Json
+  status          OutboxStatus @default(PENDING)
+  retryCount      Int          @default(0)
+  maxRetries      Int          @default(5)
+  lastError       String?
+  lockedAt        DateTime?
+  lockedBy        String?
+  leaseExpiresAt  DateTime?
+  leaseGeneration Int          @default(0)
+  leaseToken      String?
+  nextRunAt       DateTime     @default(now())
+  createdAt       DateTime     @default(now())
+  processedAt     DateTime?
+
+  @@index([status, nextRunAt])
+  @@index([status, leaseExpiresAt])
+  @@index([leaseToken])
+  @@map("outbox_events")
+}
+
+model IdempotencyRecord {
+  id              String    @id @default(uuid())
+  key             String
+  scope           String
+  status          String    @default("PENDING")
+  responsePayload Json?
+  lockedAt        DateTime?
+  lockedBy        String?
+  leaseExpiresAt  DateTime?
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  @@unique([key, scope])
+  @@index([status, leaseExpiresAt])
+  @@index([expiresAt])
+  @@map("idempotency_records")
 }

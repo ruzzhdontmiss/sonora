@@ -18,10 +18,15 @@ coverage/
 *.p8
 *.p12
 *.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
 *service-account*.json
 *credentials*.json
-secrets/
-private/
+/secrets/
+/private/
 
 # Local databases, exports, and logs
 *.db
@@ -30,17 +35,21 @@ private/
 *.dump
 *.sql.gz
 *.log
-logs/
-exports/
-backups/
-data/
+/logs/
+/exports/
+/backups/
+/data/
 
-# Local/editor/OS state
+# Local/editor/OS/agent state
 .DS_Store
 Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+.gemini/
+.claude/
+.cursor/
+.antigravity/
 *.swp
 *.swo
 *.tsbuildinfo

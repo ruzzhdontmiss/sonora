@@ -26,6 +26,18 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
+}).superRefine((data, ctx) => {
+  if (data.NODE_ENV === "production") {
+    // In production, enforce 256 bits of cryptographic entropy (64 hex characters)
+    if (!/^[0-9a-fA-F]{64}$/.test(data.TOKEN_ENCRYPTION_KEY)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "In production, TOKEN_ENCRYPTION_KEY must be a 64-character hex string (256 bits, e.g. generated via 'openssl rand -hex 32'). Human passphrases are not permitted in production.",
+        path: ["TOKEN_ENCRYPTION_KEY"],
+      });
+    }
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;

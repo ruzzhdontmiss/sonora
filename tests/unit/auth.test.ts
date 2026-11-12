@@ -344,10 +344,12 @@ describe("Authentication & Session Security (P1-T06 Security Review)", () => {
     const envObj = process.env as Record<string, string | undefined>;
     const origNodeEnv = envObj.NODE_ENV;
     const origDemoAuth = envObj.DEMO_AUTH_ENABLED;
+    const origKey = envObj.TOKEN_ENCRYPTION_KEY;
 
     try {
       envObj.NODE_ENV = "production";
       envObj.DEMO_AUTH_ENABLED = "true";
+      envObj.TOKEN_ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
       const res = await loginHandler(
         new Request("http://localhost:3000/api/auth/login", {
@@ -367,6 +369,7 @@ describe("Authentication & Session Security (P1-T06 Security Review)", () => {
     } finally {
       envObj.NODE_ENV = origNodeEnv;
       envObj.DEMO_AUTH_ENABLED = origDemoAuth;
+      envObj.TOKEN_ENCRYPTION_KEY = origKey;
     }
   });
 

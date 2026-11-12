@@ -14,11 +14,14 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "worker": "tsx src/modules/jobs/worker.ts",
     "secret-scan": "node scripts/secret-scan.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
+    "bullmq": "^6.7.0",
     "clsx": "^2.1.1",
+    "ioredis": "^6.0.0",
     "jose": "^6.0.8",
     "lucide-react": "^0.475.0",
     "next": "15.5.29",

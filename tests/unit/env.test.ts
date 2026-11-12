@@ -62,4 +62,24 @@ describe("Environment Configuration Validation (P1-T04)", () => {
       expect(confErr.message).not.toContain("unsafe-placeholder");
     }
   });
+
+  it("enforces 64-character hex key (256 bits) in production", () => {
+    // Weak passphrase in production must fail
+    expect(() =>
+      validateEnv({
+        ...validEnv,
+        NODE_ENV: "production",
+        TOKEN_ENCRYPTION_KEY: "weak-passphrase-not-256bit-hex",
+      })
+    ).toThrow(ConfigurationError);
+
+    // Valid 64-character hex key in production must succeed
+    const validHexKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const prodParsed = validateEnv({
+      ...validEnv,
+      NODE_ENV: "production",
+      TOKEN_ENCRYPTION_KEY: validHexKey,
+    });
+    expect(prodParsed.TOKEN_ENCRYPTION_KEY).toBe(validHexKey);
+  });
 });
