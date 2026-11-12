@@ -1,0 +1,46 @@
+# Dependencies and build output
+node_modules/
+.next/
+out/
+dist/
+build/
+coverage/
+.turbo/
+.cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*service-account*.json
+*credentials*.json
+secrets/
+private/
+
+# Local databases, exports, and logs
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+*.log
+logs/
+exports/
+backups/
+data/
+
+# Local/editor/OS state
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.tsbuildinfo
