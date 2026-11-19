@@ -23,6 +23,7 @@ const envSchema = z.object({
   APPLE_TEAM_ID: z.string().optional(),
   APPLE_MUSIC_KEY_ID: z.string().optional(),
   APPLE_MUSIC_PRIVATE_KEY_PATH: z.string().optional(),
+  APPLE_MUSIC_PRIVATE_KEY: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().url().optional(),

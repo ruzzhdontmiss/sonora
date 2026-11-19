@@ -146,8 +146,16 @@ export default async function LibraryPage(props: LibraryPageProps) {
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <span className="px-2 py-0.5 rounded-md bg-emerald-950/40 border border-emerald-500/20 text-emerald-400 text-[10px] font-medium">
-                            {item.sourceProvenance}
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-medium border ${
+                              item.sourceProvenance === "SPOTIFY_IMPORT"
+                                ? "bg-emerald-950/40 border-emerald-500/30 text-emerald-300"
+                                : item.sourceProvenance === "APPLE_MUSIC_IMPORT"
+                                ? "bg-pink-950/40 border-pink-500/30 text-pink-300"
+                                : "bg-zinc-800/60 border-zinc-700 text-zinc-400"
+                            }`}
+                          >
+                            {item.sourceProvenance.replace("_IMPORT", "")}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right font-mono text-gray-400">

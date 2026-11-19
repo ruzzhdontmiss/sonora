@@ -31,6 +31,7 @@ model User {
   syncRules        SyncRule[]
   snapshots        LibrarySnapshot[]
   verifiedMatches  TrackMatch[]       @relation("UserVerifiedMatches")
+  oauthStates      OAuthState[]
 
   @@map("users")
 }
@@ -78,6 +79,8 @@ model ProviderAccount {
   scopes                 String[]              @default([])
   status                 ProviderAccountStatus @default(CONNECTED)
   metadata               Json?
+  refreshLockToken       String?
+  refreshLockExpiresAt   DateTime?
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
 
@@ -90,6 +93,23 @@ model ProviderAccount {
   @@unique([id, userId]) // Composite key for cross-tenant foreign key enforcement
   @@index([userId, provider])
   @@map("provider_accounts")
+}
+
+model OAuthState {
+  id           String       @id @default(uuid())
+  provider     ProviderType
+  state        String       @unique
+  codeVerifier String
+  userId       String
+  expiresAt    DateTime
+  used         Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([state])
+  @@index([userId, provider])
+  @@map("oauth_states")
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +244,10 @@ model Playlist {
   title             String
   description       String?
   isPublic          Boolean            @default(false)
+  version           Int                @default(1)
+  isArchived        Boolean            @default(false)
+  archivedAt        DateTime?
+  snapshotHash      String?
   deletedAt         DateTime?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
@@ -236,6 +260,7 @@ model Playlist {
   @@unique([id, userId]) // Composite key guaranteeing ownership integrity
   @@unique([id, libraryId])
   @@index([libraryId, deletedAt])
+  @@index([libraryId, isArchived])
   @@index([userId])
   @@map("playlists")
 }
@@ -314,8 +339,10 @@ model TrackMatch {
   reviewStatus       TrackMatchReviewStatus @default(AUTO_MATCHED)
   conflictReason     String?
   conflictingTrackId String?
+  evidence           Json?
   verifiedByUserId   String?
   createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
   canonicalTrack     Track                  @relation(fields: [canonicalTrackId], references: [id], onDelete: Cascade)
   providerTrack      ProviderTrack          @relation(fields: [providerTrackId], references: [id], onDelete: Cascade)
@@ -432,6 +459,9 @@ model SyncJob {
   totalItems     Int             @default(0)
   processedItems Int             @default(0)
   failedItems    Int             @default(0)
+  checkpoint     Json?
+  confirmedAt    DateTime?
+  cancelledAt    DateTime?
   startedAt      DateTime?
   completedAt    DateTime?
   createdAt      DateTime        @default(now())

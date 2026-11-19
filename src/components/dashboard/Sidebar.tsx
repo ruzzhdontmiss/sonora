@@ -11,6 +11,7 @@ import {
   RefreshCw,
   HardDriveDownload,
   Disc3,
+  CheckCheck,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -18,6 +19,7 @@ export const NAVIGATION_ITEMS = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { name: "Library", href: "/dashboard/library", icon: Music },
   { name: "Playlists", href: "/dashboard/playlists", icon: ListMusic },
+  { name: "Match Review", href: "/dashboard/matching", icon: CheckCheck },
   { name: "Connections", href: "/dashboard/connections", icon: Radio },
   { name: "Transfer", href: "/dashboard/transfer", icon: ArrowLeftRight },
   { name: "Sync Rules", href: "/dashboard/sync", icon: RefreshCw },

@@ -43,6 +43,8 @@ coverage/
 # Local/editor/OS/agent state
 .DS_Store
 Thumbs.db
+*.pdf
+Rushat_Yadav_Konrad_Cover_Letter.pdf
 .vscode/*
 !.vscode/extensions.json
 .idea/

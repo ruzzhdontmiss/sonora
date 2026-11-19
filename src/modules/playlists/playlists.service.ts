@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { createHash } from "crypto";
 import {
   NotFoundError,
   ValidationError,
+  ConcurrencyConflictError,
 } from "@/modules/common/errors";
 import { getOrCreateUserLibrary, PaginationOptions, PaginatedResult } from "@/modules/library/library.service";
 
@@ -36,9 +38,15 @@ export interface AddPlaylistItemInput {
  * Asserts that the playlist exists and belongs to the given user's library.
  * Throws NotFoundError if the playlist does not exist or belongs to another user
  * to prevent leaking the existence of other users' resources (RULES.md Section 5).
+ * Validates optimistic concurrency version if expectedVersion is provided.
  */
-async function assertPlaylistOwnership(userId: string, playlistId: string) {
-  const playlist = await prisma.playlist.findUnique({
+export async function assertPlaylistOwnership(
+  userId: string,
+  playlistId: string,
+  expectedVersion?: number,
+  client: Prisma.TransactionClient | typeof prisma = prisma
+) {
+  const playlist = await client.playlist.findUnique({
     where: { id: playlistId },
     include: { library: true },
   });
@@ -51,7 +59,45 @@ async function assertPlaylistOwnership(userId: string, playlistId: string) {
     throw new NotFoundError("Playlist", playlistId);
   }
 
+  if (expectedVersion !== undefined && playlist.version !== expectedVersion) {
+    throw new ConcurrencyConflictError(
+      `Playlist version conflict. Expected version ${expectedVersion}, but database has version ${playlist.version}.`
+    );
+  }
+
   return playlist;
+}
+
+/**
+ * Calculates a deterministic SHA-256 snapshot hash for a playlist's ordered items.
+ */
+export async function calculatePlaylistSnapshotHash(
+  playlistId: string,
+  client: Prisma.TransactionClient | typeof prisma = prisma
+): Promise<string> {
+  const items = await client.playlistItem.findMany({
+    where: { playlistId },
+    orderBy: { position: "asc" },
+    include: {
+      track: {
+        select: {
+          id: true,
+          isrc: true,
+          title: true,
+          artistName: true,
+        },
+      },
+    },
+  });
+
+  const payload = items
+    .map(
+      (it) =>
+        `${it.position}:${it.trackId}:${it.track.isrc || ""}:${it.track.title}:${it.track.artistName}`
+    )
+    .join("|");
+
+  return createHash("sha256").update(payload).digest("hex");
 }
 
 /**
@@ -59,7 +105,7 @@ async function assertPlaylistOwnership(userId: string, playlistId: string) {
  */
 export async function getUserPlaylists(
   userId: string,
-  options: PaginationOptions & { includeDeleted?: boolean } = {}
+  options: PaginationOptions & { includeDeleted?: boolean; includeArchived?: boolean } = {}
 ): Promise<PaginatedResult<PlaylistWithCount>> {
   const MAX_PAGE = 10000;
   const rawPage = options.page ?? 1;
@@ -85,6 +131,10 @@ export async function getUserPlaylists(
 
   if (!options.includeDeleted) {
     whereClause.deletedAt = null;
+  }
+
+  if (!options.includeArchived) {
+    whereClause.isArchived = false;
   }
 
   if (options.search?.trim()) {
@@ -147,7 +197,7 @@ export async function getPlaylistById(userId: string, playlistId: string) {
 }
 
 /**
- * Creates a new canonical playlist for the user.
+ * Creates a new canonical playlist for the user with initial version 1.
  */
 export async function createPlaylist(userId: string, input: CreatePlaylistInput) {
   if (!input.title?.trim()) {
@@ -163,19 +213,22 @@ export async function createPlaylist(userId: string, input: CreatePlaylistInput)
       title: input.title.trim(),
       description: input.description?.trim() || null,
       isPublic: input.isPublic ?? false,
+      version: 1,
+      isArchived: false,
     },
   });
 }
 
 /**
- * Updates playlist metadata.
+ * Updates playlist metadata with optimistic concurrency check.
  */
 export async function updatePlaylist(
   userId: string,
   playlistId: string,
-  input: UpdatePlaylistInput
+  input: UpdatePlaylistInput,
+  expectedVersion?: number
 ) {
-  await assertPlaylistOwnership(userId, playlistId);
+  await assertPlaylistOwnership(userId, playlistId, expectedVersion);
 
   return await prisma.playlist.update({
     where: { id: playlistId },
@@ -183,6 +236,47 @@ export async function updatePlaylist(
       title: input.title !== undefined ? input.title.trim() : undefined,
       description: input.description !== undefined ? input.description?.trim() || null : undefined,
       isPublic: input.isPublic !== undefined ? input.isPublic : undefined,
+      version: { increment: 1 },
+    },
+  });
+}
+
+/**
+ * Archives a playlist without deleting it.
+ */
+export async function archivePlaylist(
+  userId: string,
+  playlistId: string,
+  expectedVersion?: number
+) {
+  await assertPlaylistOwnership(userId, playlistId, expectedVersion);
+
+  return await prisma.playlist.update({
+    where: { id: playlistId },
+    data: {
+      isArchived: true,
+      archivedAt: new Date(),
+      version: { increment: 1 },
+    },
+  });
+}
+
+/**
+ * Restores an archived playlist to active status.
+ */
+export async function restorePlaylist(
+  userId: string,
+  playlistId: string,
+  expectedVersion?: number
+) {
+  await assertPlaylistOwnership(userId, playlistId, expectedVersion);
+
+  return await prisma.playlist.update({
+    where: { id: playlistId },
+    data: {
+      isArchived: false,
+      archivedAt: null,
+      version: { increment: 1 },
     },
   });
 }
@@ -194,9 +288,9 @@ export async function updatePlaylist(
 export async function deletePlaylist(
   userId: string,
   playlistId: string,
-  options: { permanent?: boolean } = {}
+  options: { permanent?: boolean; expectedVersion?: number } = {}
 ) {
-  await assertPlaylistOwnership(userId, playlistId);
+  await assertPlaylistOwnership(userId, playlistId, options.expectedVersion);
 
   if (options.permanent) {
     await prisma.playlist.delete({
@@ -205,7 +299,10 @@ export async function deletePlaylist(
   } else {
     await prisma.playlist.update({
       where: { id: playlistId },
-      data: { deletedAt: new Date() },
+      data: {
+        deletedAt: new Date(),
+        version: { increment: 1 },
+      },
     });
   }
 
@@ -216,13 +313,15 @@ export async function deletePlaylist(
  * Adds an item to a playlist.
  * IMPORTANT: Multiple items in the same playlist MAY reference the same trackId!
  * Positions are contiguous and shifted atomically.
+ * Updates playlist version and snapshot hash.
  */
 export async function addPlaylistItem(
   userId: string,
   playlistId: string,
-  input: AddPlaylistItemInput
+  input: AddPlaylistItemInput,
+  expectedVersion?: number
 ) {
-  await assertPlaylistOwnership(userId, playlistId);
+  await assertPlaylistOwnership(userId, playlistId, expectedVersion);
 
   // Verify track exists
   const track = await prisma.track.findUnique({
@@ -235,6 +334,9 @@ export async function addPlaylistItem(
   return await prisma.$transaction(async (tx) => {
     // Acquire row-level lock on playlist to serialize concurrent item additions/reorders
     await tx.$queryRaw`SELECT id FROM playlists WHERE id = ${playlistId} FOR UPDATE`;
+
+    // Re-verify version under transaction lock
+    await assertPlaylistOwnership(userId, playlistId, expectedVersion, tx);
 
     const existingCount = await tx.playlistItem.count({
       where: { playlistId },
@@ -284,23 +386,38 @@ export async function addPlaylistItem(
       },
     });
 
+    const newSnapshotHash = await calculatePlaylistSnapshotHash(playlistId, tx);
+
+    // Bump playlist version and snapshot hash
+    await tx.playlist.update({
+      where: { id: playlistId },
+      data: {
+        version: { increment: 1 },
+        snapshotHash: newSnapshotHash,
+      },
+    });
+
     return newItem;
   });
 }
 
 /**
  * Removes an item from a playlist by item ID and shifts subsequent positions down.
+ * Updates playlist version and snapshot hash.
  */
 export async function removePlaylistItem(
   userId: string,
   playlistId: string,
-  itemId: string
+  itemId: string,
+  expectedVersion?: number
 ) {
-  await assertPlaylistOwnership(userId, playlistId);
+  await assertPlaylistOwnership(userId, playlistId, expectedVersion);
 
   return await prisma.$transaction(async (tx) => {
     // Acquire row-level lock on playlist to serialize concurrent item updates
     await tx.$queryRaw`SELECT id FROM playlists WHERE id = ${playlistId} FOR UPDATE`;
+
+    await assertPlaylistOwnership(userId, playlistId, expectedVersion, tx);
 
     const item = await tx.playlistItem.findFirst({
       where: { id: itemId, playlistId },
@@ -340,6 +457,17 @@ export async function removePlaylistItem(
       });
     }
 
+    const newSnapshotHash = await calculatePlaylistSnapshotHash(playlistId, tx);
+
+    // Bump playlist version and snapshot hash
+    await tx.playlist.update({
+      where: { id: playlistId },
+      data: {
+        version: { increment: 1 },
+        snapshotHash: newSnapshotHash,
+      },
+    });
+
     return { success: true };
   });
 }
@@ -348,13 +476,15 @@ export async function removePlaylistItem(
  * Atomically reorders playlist items.
  * Takes an array of PlaylistItem IDs in desired sequence order [id0, id1, id2, ...]
  * Preserves duplicate tracks cleanly because reordering operates strictly on unique PlaylistItem IDs.
+ * Bumps playlist version and snapshot hash.
  */
 export async function reorderPlaylistItems(
   userId: string,
   playlistId: string,
-  orderedItemIds: string[]
+  orderedItemIds: string[],
+  expectedVersion?: number
 ) {
-  await assertPlaylistOwnership(userId, playlistId);
+  await assertPlaylistOwnership(userId, playlistId, expectedVersion);
 
   // Validate duplicate IDs in input array
   const submittedSet = new Set(orderedItemIds);
@@ -365,6 +495,8 @@ export async function reorderPlaylistItems(
   return await prisma.$transaction(async (tx) => {
     // Acquire row-level lock on playlist to serialize concurrent reorders
     await tx.$queryRaw`SELECT id FROM playlists WHERE id = ${playlistId} FOR UPDATE`;
+
+    await assertPlaylistOwnership(userId, playlistId, expectedVersion, tx);
 
     const currentItems = await tx.playlistItem.findMany({
       where: { playlistId },
@@ -405,6 +537,17 @@ export async function reorderPlaylistItems(
         throw new ValidationError(`Failed to finalize position for item ${orderedItemIds[idx]}.`);
       }
     }
+
+    const newSnapshotHash = await calculatePlaylistSnapshotHash(playlistId, tx);
+
+    // Bump version and snapshot hash
+    await tx.playlist.update({
+      where: { id: playlistId },
+      data: {
+        version: { increment: 1 },
+        snapshotHash: newSnapshotHash,
+      },
+    });
 
     return await tx.playlistItem.findMany({
       where: { playlistId },

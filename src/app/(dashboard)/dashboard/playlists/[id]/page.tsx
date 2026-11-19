@@ -101,6 +101,14 @@ export default async function PlaylistDetailPage(props: PlaylistDetailPageProps)
           <div className="flex items-center space-x-2 text-xs text-purple-400 font-semibold mb-1 uppercase tracking-wider">
             <span>Canonical Playlist</span>
             <span>•</span>
+            <span className="font-mono text-indigo-300">v{playlist.version}</span>
+            <span>•</span>
+            {playlist.isArchived && (
+              <>
+                <span className="text-amber-400 font-bold">ARCHIVED</span>
+                <span>•</span>
+              </>
+            )}
             <span className="flex items-center space-x-1 text-gray-400">
               {playlist.isPublic ? (
                 <>

@@ -86,19 +86,29 @@ export default async function PlaylistsPage(props: PlaylistsPageProps) {
                     <div className="w-10 h-10 rounded-xl bg-purple-950/40 border border-purple-500/20 flex items-center justify-center text-purple-400 group-hover:scale-105 transition-transform">
                       <ListMusic className="w-5 h-5" />
                     </div>
-                    <span className="flex items-center space-x-1 text-[11px] text-gray-400 px-2 py-0.5 rounded-md bg-[#1f2438]">
-                      {playlist.isPublic ? (
-                        <>
-                          <Globe className="w-3 h-3 text-emerald-400" />
-                          <span>Public</span>
-                        </>
-                      ) : (
-                        <>
-                          <Lock className="w-3 h-3 text-amber-400" />
-                          <span>Private</span>
-                        </>
+                    <div className="flex items-center space-x-1.5">
+                      {playlist.isArchived && (
+                        <span className="text-[10px] font-semibold text-amber-300 px-1.5 py-0.5 rounded bg-amber-950/50 border border-amber-800/30">
+                          Archived
+                        </span>
                       )}
-                    </span>
+                      <span className="text-[10px] font-mono text-indigo-300 px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-800/30">
+                        v{playlist.version}
+                      </span>
+                      <span className="flex items-center space-x-1 text-[11px] text-gray-400 px-2 py-0.5 rounded-md bg-[#1f2438]">
+                        {playlist.isPublic ? (
+                          <>
+                            <Globe className="w-3 h-3 text-emerald-400" />
+                            <span>Public</span>
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="w-3 h-3 text-amber-400" />
+                            <span>Private</span>
+                          </>
+                        )}
+                      </span>
+                    </div>
                   </div>
 
                   <h3 className="font-bold text-white text-base group-hover:text-indigo-400 transition-colors">

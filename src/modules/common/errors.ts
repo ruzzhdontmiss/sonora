@@ -33,6 +33,13 @@ export class ConflictError extends DomainError {
   }
 }
 
+export class ConcurrencyConflictError extends ConflictError {
+  constructor(message = "Resource has been modified by another concurrent request. Please refresh and retry.") {
+    super(message);
+    this.name = "ConcurrencyConflictError";
+  }
+}
+
 export class ValidationError extends DomainError {
   public readonly errors?: Record<string, string[]>;
 

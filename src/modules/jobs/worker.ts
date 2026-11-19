@@ -152,6 +152,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log("Received PING event:", payload);
   });
 
+  dispatcher.registerHandler("IMPORT_JOB_DISPATCHED", async (payload) => {
+    const { executeImportJob } = await import("./import-orchestrator");
+    await executeImportJob(payload);
+  });
+
+  dispatcher.registerHandler("MIGRATION_JOB_DISPATCH", async (payload) => {
+    const { executeMigrationJob } = await import("./migration-orchestrator");
+    await executeMigrationJob(payload);
+  });
+
   const shutdown = () => {
     console.log("\nReceived termination signal. Shutting down dispatcher...");
     dispatcher.stop();
