@@ -48,7 +48,7 @@ function LoginForm() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-white">SONORA Sign In</h1>
           <p className="mt-2 text-sm text-gray-400">
-            Phase 1 Foundation Shell
+            Universal Music Library
           </p>
         </div>
 
@@ -62,10 +62,10 @@ function LoginForm() {
         <div className="mt-6 p-4 rounded-xl bg-[#090a0f] border border-[#1f2438] text-xs text-gray-400 space-y-2">
           <div className="flex items-center space-x-2 text-amber-400 font-semibold">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>Phase 1 Authentication Boundary</span>
+            <span>Development Authentication</span>
           </div>
           <p className="leading-relaxed">
-            Passwordless email login has been removed to prevent unauthorized account access. Production authentication (OAuth / secure provider integration) will be established in later tickets.
+            Production authentication connects through approved streaming providers (Spotify, Apple Music, Google).
           </p>
           <p className="text-gray-500">
             Only the explicitly enabled local development demo user is available in this environment (<code className="text-gray-400">DEMO_AUTH_ENABLED=true</code>).

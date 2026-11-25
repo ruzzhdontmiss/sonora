@@ -61,7 +61,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             <span className="font-bold tracking-tight text-white text-lg">SONORA</span>
           </Link>
           <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800/40">
-            Phase 1
+            Universal
           </span>
         </div>
 

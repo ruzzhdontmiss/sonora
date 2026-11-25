@@ -46,9 +46,9 @@ export default async function DashboardOverviewPage() {
       <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-500/20 flex items-start space-x-3 text-sm text-indigo-300">
         <Sparkles className="w-5 h-5 flex-shrink-0 text-indigo-400 mt-0.5" />
         <div>
-          <p className="font-semibold text-white">Phase 2 Canonical Architecture Active</p>
+          <p className="font-semibold text-white">Universal Music Engine Active</p>
           <p className="mt-0.5 text-xs text-indigo-300/80 leading-relaxed">
-            Universal tracks, ordered playlists (preserving duplicate tracks), provider mapping decoupling, and transactional outbox infrastructure are live. Live streaming imports begin in Phase 3.
+            Universal tracks, ordered playlists (preserving duplicates), cross-provider matching (Spotify, Apple Music, YouTube), deterministic transfers with prefix verification, and portable backups are active.
           </p>
         </div>
       </div>
@@ -79,7 +79,7 @@ export default async function DashboardOverviewPage() {
             <Radio className="w-4 h-4 text-emerald-400" />
           </div>
           <p className="mt-3 text-3xl font-bold text-white">{providersCount}</p>
-          <p className="mt-1 text-xs text-gray-500">Live OAuth in Phase 3</p>
+          <p className="mt-1 text-xs text-gray-500">Spotify, Apple & YouTube</p>
         </div>
 
         <div className="p-5 rounded-2xl bg-[#12151f] border border-[#1f2438]">

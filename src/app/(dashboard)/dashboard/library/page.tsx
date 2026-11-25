@@ -53,7 +53,7 @@ export default async function LibraryPage(props: LibraryPageProps) {
             className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-md shadow-indigo-600/20"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Connect Provider (Phase 3)</span>
+            <span>Connect Provider</span>
           </Link>
         </div>
       </div>
@@ -89,7 +89,7 @@ export default async function LibraryPage(props: LibraryPageProps) {
           <p className="text-sm text-gray-400 leading-relaxed mb-6">
             {searchQuery
               ? `No tracks found matching "${searchQuery}". Try a different search query.`
-              : "Your canonical library is currently empty. Run the synthetic seed script (pnpm db:seed) to load development test tracks, or connect streaming providers in Phase 3."}
+              : "Your canonical library is currently empty. Run the synthetic seed script (pnpm db:seed) to load development test tracks, or connect streaming providers in Connections."}
           </p>
 
           <div className="w-full p-4 rounded-xl bg-[#090a0f] border border-[#1f2438] text-left text-xs text-gray-400 space-y-1.5">
