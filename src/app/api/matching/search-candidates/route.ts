@@ -3,7 +3,12 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { ProviderType } from "@prisma/client";
 import { getSpotifyAccessTokenForUser } from "@/modules/providers/spotify/spotify-writer.service";
 import { getAppleDeveloperToken } from "@/modules/providers/apple/apple-token.service";
-import { searchSpotifyCatalog, searchAppleMusicCatalog } from "@/modules/matching/matching-engine";
+import { getYouTubeAccessToken } from "@/modules/providers/youtube/youtube-auth.service";
+import {
+  searchSpotifyCatalog,
+  searchAppleMusicCatalog,
+  searchYouTubeCatalog,
+} from "@/modules/matching/matching-engine";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +26,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Query string is required" }, { status: 400 });
     }
 
-    if (!provider || (provider !== ProviderType.SPOTIFY && provider !== ProviderType.APPLE_MUSIC)) {
+    if (
+      !provider ||
+      (provider !== ProviderType.SPOTIFY &&
+        provider !== ProviderType.APPLE_MUSIC &&
+        provider !== ProviderType.YOUTUBE_MUSIC)
+    ) {
       return NextResponse.json(
-        { error: "Valid provider (SPOTIFY or APPLE_MUSIC) is required" },
+        { error: "Valid provider (SPOTIFY, APPLE_MUSIC, or YOUTUBE_MUSIC) is required" },
         { status: 400 }
       );
     }
@@ -39,6 +49,16 @@ export async function POST(request: Request) {
     if (provider === ProviderType.APPLE_MUSIC) {
       const devToken = await getAppleDeveloperToken();
       const candidates = await searchAppleMusicCatalog(query.trim(), devToken, "us", 10);
+      return NextResponse.json({ success: true, provider, candidates });
+    }
+
+    if (provider === ProviderType.YOUTUBE_MUSIC) {
+      const accessToken = await getYouTubeAccessToken(userId);
+      const candidates = await searchYouTubeCatalog(query.trim(), {
+        accessToken,
+        userId,
+        limit: 10,
+      });
       return NextResponse.json({ success: true, provider, candidates });
     }
 

@@ -8,6 +8,10 @@ import {
   AppleImportCheckpoint as AppleMusicImportCheckpoint,
 } from "@/modules/providers/apple/apple-importer.service";
 import {
+  youTubeImporter,
+  YouTubeImportCheckpoint,
+} from "@/modules/providers/youtube/youtube-importer.service";
+import {
   ProviderAccountStatus,
   ProviderType,
   SyncJob,
@@ -165,6 +169,22 @@ export async function executeImportJob(payload: unknown): Promise<void> {
         providerAccountId,
         syncJobId,
         checkpoint: (job.checkpoint as unknown as AppleMusicImportCheckpoint) ?? undefined,
+        onProgress: async (progress) => {
+          await prisma.syncJob.update({
+            where: { id: syncJobId },
+            data: {
+              processedItems: progress.processed,
+              failedItems: progress.failed,
+            },
+          });
+        },
+      });
+    } else if (account.provider === ProviderType.YOUTUBE_MUSIC) {
+      await youTubeImporter.importLibrary({
+        userId,
+        providerAccountId,
+        syncJobId,
+        checkpoint: (job.checkpoint as unknown as YouTubeImportCheckpoint) ?? undefined,
         onProgress: async (progress) => {
           await prisma.syncJob.update({
             where: { id: syncJobId },

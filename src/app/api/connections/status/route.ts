@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { prisma } from "@/lib/db";
 import { getSpotifyConfigStatus } from "@/modules/providers/spotify/spotify-auth.service";
 import { getAppleConfigStatus } from "@/modules/providers/apple/apple-token.service";
+import { getGoogleConfigStatus } from "@/modules/providers/youtube/youtube-auth.service";
 import { ProviderAccountStatus, ProviderType, SyncJobType } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -14,6 +15,7 @@ export async function GET(request: NextRequest) {
 
     const spotifyConfig = getSpotifyConfigStatus();
     const appleConfig = getAppleConfigStatus();
+    const googleConfig = getGoogleConfigStatus();
 
     // Fetch user's provider accounts
     const accounts = await prisma.providerAccount.findMany({
@@ -40,8 +42,12 @@ export async function GET(request: NextRequest) {
       (a) => a.provider === ProviderType.APPLE_MUSIC && a.status === ProviderAccountStatus.CONNECTED
     ) || null;
 
+    const youtubeAccount = accounts.find(
+      (a) => a.provider === ProviderType.YOUTUBE_MUSIC && a.status === ProviderAccountStatus.CONNECTED
+    ) || null;
+
     // Fetch latest import jobs for each provider
-    const [latestSpotifyJob, latestAppleJob] = await Promise.all([
+    const [latestSpotifyJob, latestAppleJob, latestYouTubeJob] = await Promise.all([
       prisma.syncJob.findFirst({
         where: {
           userId: auth.user.id,
@@ -54,6 +60,14 @@ export async function GET(request: NextRequest) {
         where: {
           userId: auth.user.id,
           sourceProvider: ProviderType.APPLE_MUSIC,
+          jobType: SyncJobType.IMPORT,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.syncJob.findFirst({
+        where: {
+          userId: auth.user.id,
+          sourceProvider: ProviderType.YOUTUBE_MUSIC,
           jobType: SyncJobType.IMPORT,
         },
         orderBy: { createdAt: "desc" },
@@ -74,11 +88,11 @@ export async function GET(request: NextRequest) {
         lastImportJob: latestAppleJob,
       },
       youtubeMusic: {
-        isConfigured: false,
-        missingVariables: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
-        connectedAccount: null,
-        lastImportJob: null,
-        note: "YouTube Data API v3 integration scheduled for Phase 5.",
+        isConfigured: googleConfig.isConfigured,
+        missingVariables: googleConfig.missingVariables,
+        connectedAccount: youtubeAccount,
+        lastImportJob: latestYouTubeJob,
+        note: "YouTube Data API v3 integration active with 50-unit write quota guardrails.",
       },
     });
   } catch (err: unknown) {

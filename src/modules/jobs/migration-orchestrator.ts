@@ -27,6 +27,13 @@ import {
   saveTracksToAppleLibrary as saveAppleLikedTracks,
   getLibraryPlaylistTrackIds as getApplePlaylistTracks,
 } from "@/modules/providers/apple/apple-writer.service";
+import {
+  createDestinationPlaylist as createYouTubePlaylist,
+  addTracksToDestinationPlaylist as addYouTubeTracks,
+  verifyDestinationPlaylist as verifyYouTubePlaylist,
+  saveTracksToUserLibrary as saveYouTubeLikedTracks,
+  getDestinationPlaylistVideoIds as getYouTubePlaylistTracks,
+} from "@/modules/providers/youtube/youtube-writer.service";
 
 export interface MigrationPreviewItem {
   canonicalTrackId: string;
@@ -350,16 +357,22 @@ export async function generateMigrationPreview(
     const destinationSemantic =
       destinationProvider === ProviderType.SPOTIFY
         ? "Spotify 'Liked Songs' collection (PUT /v1/me/library?uris=...)"
-        : "Apple Music Cloud Library (POST /v1/me/library?ids[songs]=...)";
+        : destinationProvider === ProviderType.APPLE_MUSIC
+        ? "Apple Music Cloud Library (POST /v1/me/library?ids[songs]=...)"
+        : "YouTube Music Liked Videos (POST /v1/videos/rate?rating=like)";
 
     const requiredScope =
       destinationProvider === ProviderType.SPOTIFY
         ? "user-library-modify"
-        : "MusicKit Music-User-Token (Cloud Library write)";
+        : destinationProvider === ProviderType.APPLE_MUSIC
+        ? "MusicKit Music-User-Token (Cloud Library write)"
+        : "https://www.googleapis.com/auth/youtube";
 
     const warningNote =
       destinationProvider === ProviderType.APPLE_MUSIC
         ? "Note: Apple Music Cloud Library addition is distinct from track ratings (Favorites/Love). MusicKit adds songs to your library without altering star/favorite ratings."
+        : destinationProvider === ProviderType.YOUTUBE_MUSIC
+        ? "Note: Writing liked tracks to YouTube uses POST /videos/rate?rating=like (50 units per video). Daily quota limits apply."
         : undefined;
 
     likedSongsSummary = {
@@ -576,6 +589,7 @@ export async function executeMigrationJob(payload: unknown): Promise<void> {
 
       const validUris: string[] = [];
       const validAppleSongIds: string[] = [];
+      const validYouTubeVideoIds: string[] = [];
 
       for (const item of playlist.items) {
         const destMatch = item.track.matches.find(
@@ -587,6 +601,8 @@ export async function executeMigrationJob(payload: unknown): Promise<void> {
             validUris.push(destMatch.providerTrack.providerUri || `spotify:track:${destMatch.providerTrack.externalId}`);
           } else if (destinationProvider === ProviderType.APPLE_MUSIC) {
             validAppleSongIds.push(destMatch.providerTrack.externalId);
+          } else if (destinationProvider === ProviderType.YOUTUBE_MUSIC) {
+            validYouTubeVideoIds.push(destMatch.providerTrack.externalId);
           }
         } else {
           failedCount++;
@@ -626,6 +642,13 @@ export async function executeMigrationJob(payload: unknown): Promise<void> {
             playlist.description || undefined
           );
           createdExternalId = created.externalId;
+        } else if (destinationProvider === ProviderType.YOUTUBE_MUSIC) {
+          const created = await createYouTubePlaylist(
+            userId,
+            playlist.title,
+            playlist.description || undefined
+          );
+          createdExternalId = created.externalId;
         }
 
         // Immediately persist targetId checkpoint in database so retry never creates duplicate playlist!
@@ -642,7 +665,12 @@ export async function executeMigrationJob(payload: unknown): Promise<void> {
       }
 
       // Determine intended ordered items for this playlist
-      const intendedItems = destinationProvider === ProviderType.SPOTIFY ? validUris : validAppleSongIds;
+      const intendedItems =
+        destinationProvider === ProviderType.SPOTIFY
+          ? validUris
+          : destinationProvider === ProviderType.APPLE_MUSIC
+          ? validAppleSongIds
+          : validYouTubeVideoIds;
 
       // 2. Safe Prefix Recovery Algorithm:
       // Reads actual ordered destination items, compares prefix, preserves duplicates and order,
@@ -655,6 +683,8 @@ export async function executeMigrationJob(payload: unknown): Promise<void> {
             existingItems = await getSpotifyPlaylistTracks(userId, createdExternalId);
           } else if (destinationProvider === ProviderType.APPLE_MUSIC) {
             existingItems = await getApplePlaylistTracks(userId, createdExternalId);
+          } else if (destinationProvider === ProviderType.YOUTUBE_MUSIC) {
+            existingItems = await getYouTubePlaylistTracks(userId, createdExternalId);
           }
         } catch (readErr: unknown) {
           const readErrMsg = readErr instanceof Error ? readErr.message : "Failed to read destination playlist";
@@ -732,6 +762,20 @@ export async function executeMigrationJob(payload: unknown): Promise<void> {
           } else if (!verifyRes.verified) {
             playlistVerificationStatus = "MISMATCH";
             verifyError = `Destination playlist verification incomplete: expected ${validAppleSongIds.length} tracks, but read-back verified ${verifyRes.actualCount} tracks.`;
+          }
+        }
+      } else if (destinationProvider === ProviderType.YOUTUBE_MUSIC) {
+        const remainingVideoIds = validYouTubeVideoIds.slice(resumableIndex);
+        if (remainingVideoIds.length > 0) {
+          const writeRes = await addYouTubeTracks(userId, createdExternalId, remainingVideoIds);
+          processedCount += writeRes.addedCount;
+          failedCount += writeRes.failedVideoIds.length;
+
+          // Read-back verification
+          const verifyRes = await verifyYouTubePlaylist(userId, createdExternalId, validYouTubeVideoIds.length);
+          if (!verifyRes.verified) {
+            playlistVerificationStatus = "MISMATCH";
+            verifyError = `Destination playlist verification incomplete: expected ${validYouTubeVideoIds.length} tracks, but read-back verified ${verifyRes.actualCount} tracks.`;
           }
         }
       }
@@ -834,6 +878,10 @@ export async function executeMigrationJob(payload: unknown): Promise<void> {
             processedCount += saveRes.savedCount;
             failedCount += saveRes.failedIds.length;
             appleSaveStatus = saveRes.status;
+          } else if (destinationProvider === ProviderType.YOUTUBE_MUSIC) {
+            const saveRes = await saveYouTubeLikedTracks(userId, uniqueDestTrackIds);
+            processedCount += saveRes.savedCount;
+            failedCount += saveRes.failedIds.length;
           }
         }
 

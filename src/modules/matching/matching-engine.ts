@@ -5,6 +5,14 @@ import {
   TrackRecordingType,
   NormalizedTrackMetadata,
 } from "./metadata-normalizer";
+import {
+  parseYouTubeDuration,
+  extractIsrcFromYouTubeDescription,
+  parseYouTubeVideoTitle,
+} from "./youtube-normalizer";
+import { getYouTubeQuotaManager } from "@/modules/providers/youtube/quota/youtube-quota-manager";
+import { getRedisClient } from "@/lib/redis";
+import crypto from "crypto";
 
 export interface CandidateTrack {
   id: string; // provider external ID or URI
@@ -577,6 +585,167 @@ export async function searchAppleMusicCatalog(
   });
 }
 
+// In-memory catalog search cache to avoid burning quota limits
+const catalogSearchMemoryCache = new Map<string, { candidates: CandidateTrack[]; expiresAt: number }>();
+
+export interface SearchYouTubeCatalogOptions {
+  accessToken: string;
+  userId?: string;
+  limit?: number;
+  useCache?: boolean;
+  cacheTtlSeconds?: number;
+}
+
+/**
+ * Searches the YouTube Data API v3 catalog for musical tracks, adhering strictly
+ * to the quota model and caching candidates to protect the daily 100-call search ceiling.
+ */
+export async function searchYouTubeCatalog(
+  query: string,
+  options: SearchYouTubeCatalogOptions
+): Promise<CandidateTrack[]> {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) return [];
+
+  const useCache = options.useCache !== false;
+  const ttlSeconds = options.cacheTtlSeconds || 86400; // 24-hour default
+  const cacheKey = `yt:catalog:search:${crypto.createHash("sha256").update(cleanQuery.toLowerCase()).digest("hex")}`;
+
+  // 1. In-memory cache lookup
+  if (useCache) {
+    const memoryHit = catalogSearchMemoryCache.get(cacheKey);
+    if (memoryHit && Date.now() < memoryHit.expiresAt) {
+      return memoryHit.candidates;
+    }
+
+    // 2. Redis cache lookup
+    try {
+      const redis = getRedisClient();
+      const redisHit = await redis.get(cacheKey);
+      if (redisHit) {
+        const candidates = JSON.parse(redisHit) as CandidateTrack[];
+        catalogSearchMemoryCache.set(cacheKey, {
+          candidates,
+          expiresAt: Date.now() + ttlSeconds * 1000,
+        });
+        return candidates;
+      }
+    } catch {
+      // Non-fatal if Redis is temporarily unreachable
+    }
+  }
+
+  // 3. Quota accounting: consume 1 Search Queries call (0 general units)
+  const quotaManager = getYouTubeQuotaManager();
+  await quotaManager.consumeQuota({ generalUnits: 0, searchCalls: 1, operation: "search.list" });
+
+  // 4. YouTube search.list query constrained to musical content
+  const limit = Math.min(Math.max(1, options.limit || 10), 25);
+  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&maxResults=${limit}&q=${encodeURIComponent(cleanQuery)}`;
+
+  const searchRes = await fetch(searchUrl, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${options.accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!searchRes.ok) {
+    if (searchRes.status === 429) {
+      const retryAfter = searchRes.headers.get("Retry-After");
+      throw new Error(`YouTube search rate-limited (429). Retry-After: ${retryAfter || 5}`);
+    }
+    const errText = await searchRes.text();
+    throw new Error(`YouTube catalog search failed (${searchRes.status}): ${errText}`);
+  }
+
+  const searchData = await searchRes.json();
+  const searchItems = (searchData.items || []) as Array<Record<string, unknown>>;
+  const videoIds = searchItems
+    .map((it) => (it["id"] as Record<string, unknown> | undefined)?.["videoId"] as string)
+    .filter(Boolean);
+
+  if (videoIds.length === 0) {
+    return [];
+  }
+
+  // 5. Batch videos.list to obtain contentDetails (exact ISO 8601 duration and rating)
+  // Consumes 1 general unit from General bucket
+  await quotaManager.consumeQuota({ generalUnits: 1, searchCalls: 0, operation: "videos.list" });
+  const videosUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${encodeURIComponent(videoIds.join(","))}`;
+
+  const videoMap = new Map<string, Record<string, unknown>>();
+  try {
+    const videosRes = await fetch(videosUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${options.accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (videosRes.ok) {
+      const videosData = await videosRes.json();
+      const videoItems = (videosData.items || []) as Array<Record<string, unknown>>;
+      for (const v of videoItems) {
+        if (v["id"]) videoMap.set(String(v["id"]), v);
+      }
+    }
+  } catch {
+    // If videos.list fails, continue with snippet-only data
+  }
+
+  // 6. Map to CandidateTrack with normalized metadata
+  const candidates: CandidateTrack[] = searchItems.map((searchItem): CandidateTrack => {
+    const videoId = (searchItem["id"] as Record<string, unknown>)?.["videoId"] as string;
+    const detailed = videoMap.get(videoId);
+    const snippet = (detailed?.["snippet"] || searchItem["snippet"] || {}) as Record<string, unknown>;
+    const contentDetails = (detailed?.["contentDetails"] || {}) as Record<string, unknown>;
+
+    const rawTitle = String(snippet["title"] || "");
+    const channelTitle = String(snippet["channelTitle"] || "");
+    const description = String(snippet["description"] || "");
+    const durationIso = String(contentDetails["duration"] || "");
+    const durationMs = parseYouTubeDuration(durationIso);
+
+    const parsed = parseYouTubeVideoTitle(rawTitle, channelTitle, description);
+    const isrc = extractIsrcFromYouTubeDescription(description);
+
+    const contentRating = contentDetails["contentRating"] as Record<string, unknown> | undefined;
+    const explicit = parsed.isExplicit || contentRating?.["ytRating"] === "ytAgeRestricted";
+
+    return {
+      id: videoId,
+      provider: ProviderType.YOUTUBE_MUSIC,
+      title: parsed.title,
+      artistName: parsed.artist,
+      albumName: null,
+      durationMs,
+      isrc,
+      explicit,
+      uri: `https://www.youtube.com/watch?v=${videoId}`,
+      rawMetadata: detailed || searchItem,
+    };
+  });
+
+  // 7. Store in caches
+  if (useCache) {
+    catalogSearchMemoryCache.set(cacheKey, {
+      candidates,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    });
+    try {
+      const redis = getRedisClient();
+      await redis.set(cacheKey, JSON.stringify(candidates), "EX", ttlSeconds);
+    } catch {
+      // Non-fatal cache write failure
+    }
+  }
+
+  return candidates;
+}
+
 /**
  * High-level candidate retrieval with fallback queries.
  */
@@ -594,6 +763,8 @@ export async function retrieveAndMatchCandidates(
     spotifyAccessToken?: string;
     appleDeveloperToken?: string;
     appleStorefront?: string;
+    youTubeAccessToken?: string;
+    userId?: string;
   }
 ): Promise<MatchResult> {
   const norm = normalizeTrackMetadata(sourceTrack);
@@ -632,9 +803,80 @@ export async function retrieveAndMatchCandidates(
     if (candidates.length === 0 && norm.cleanTitle) {
       candidates = await searchAppleMusicCatalog(norm.cleanTitle, credentials.appleDeveloperToken, storefront, 10);
     }
+  } else if (destinationProvider === ProviderType.YOUTUBE_MUSIC) {
+    if (!credentials.youTubeAccessToken) {
+      throw new Error("Missing YouTube access token for catalog search");
+    }
+
+    // Stage 1: Clean title + primary artist
+    const query1 = `${norm.cleanTitle} ${norm.primaryArtist}`;
+    candidates = await searchYouTubeCatalog(query1, {
+      accessToken: credentials.youTubeAccessToken,
+      userId: credentials.userId,
+      limit: 10,
+    });
+
+    // Stage 2: Fallback query using clean title only if 0 results
+    if (candidates.length === 0 && norm.cleanTitle) {
+      candidates = await searchYouTubeCatalog(norm.cleanTitle, {
+        accessToken: credentials.youTubeAccessToken,
+        userId: credentials.userId,
+        limit: 10,
+      });
+    }
   } else {
     throw new Error(`Unsupported destination provider: ${destinationProvider}`);
   }
 
-  return evaluateCandidates(sourceTrack, candidates);
+  const result = evaluateCandidates(sourceTrack, candidates);
+
+  // YouTube-specific tiered verification:
+  // Enforce version compatibility and duration tolerance gating
+  if (destinationProvider === ProviderType.YOUTUBE_MUSIC && result.bestMatch) {
+    const bestCand = result.bestMatch;
+    const candParsed = parseYouTubeVideoTitle(bestCand.title, bestCand.artistName);
+
+    // Tier 1: Exact ISRC match
+    if (
+      sourceTrack.isrc &&
+      bestCand.isrc &&
+      sourceTrack.isrc.trim().toUpperCase() === bestCand.isrc.trim().toUpperCase()
+    ) {
+      // Check for material contradiction
+      if (
+        result.evidence?.breakdown.titleSimilarity !== undefined &&
+        result.evidence.breakdown.titleSimilarity < 0.50
+      ) {
+        result.isConflict = true;
+        result.reviewStatus = TrackMatchReviewStatus.NEEDS_REVIEW;
+      }
+    } else {
+      // Incompatible version gating: NEVER match studio canonical track to Live, Cover, or Remix
+      if (
+        norm.recordingType === "ORIGINAL" &&
+        candParsed.recordingType !== "ORIGINAL" &&
+        candParsed.recordingType !== "REMASTER"
+      ) {
+        result.isConflict = true;
+        result.reviewStatus = TrackMatchReviewStatus.NEEDS_REVIEW;
+        result.conflictReason = `Incompatible version: canonical track is studio ORIGINAL, while candidate is ${candParsed.recordingType}`;
+      }
+
+      // Duration tolerance: if difference exceeds 10,000ms (10s) and neither is extended/live
+      const durDiff = Math.abs(sourceTrack.durationMs - bestCand.durationMs);
+      if (
+        durDiff > 10000 &&
+        norm.recordingType === "ORIGINAL" &&
+        candParsed.recordingType === "ORIGINAL"
+      ) {
+        result.reviewStatus = TrackMatchReviewStatus.NEEDS_REVIEW;
+        result.conflictReason = `Duration delta (${Math.round(durDiff / 1000)}s) exceeds YouTube tolerance threshold of 10s`;
+        if (result.category === "EXACT" || result.category === "HIGH") {
+          result.isAmbiguous = true;
+        }
+      }
+    }
+  }
+
+  return result;
 }

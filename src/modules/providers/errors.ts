@@ -71,3 +71,39 @@ export class ProviderAuthenticationError extends ProviderError {
     this.name = "ProviderAuthenticationError";
   }
 }
+
+export class ProviderQuotaExhaustedError extends ProviderError {
+  public readonly quotaBucket: "GENERAL" | "SEARCH";
+  public readonly limit: number;
+  public readonly requested: number;
+  public readonly remaining: number;
+  public readonly resetsAt: Date;
+  public readonly projectId?: string;
+
+  constructor(params: {
+    provider: string;
+    quotaBucket: "GENERAL" | "SEARCH";
+    limit: number;
+    requested: number;
+    remaining: number;
+    resetsAt: Date;
+    projectId?: string;
+  }) {
+    super(
+      params.provider,
+      `Daily ${params.quotaBucket} quota exhausted for Google Cloud project${
+        params.projectId ? ` "${params.projectId}"` : ""
+      }. Limit: ${params.limit}, Requested: ${params.requested}, Remaining: ${
+        params.remaining
+      }. Quota resets at midnight Pacific Time (${params.resetsAt.toISOString()}).`
+    );
+    this.name = "ProviderQuotaExhaustedError";
+    this.quotaBucket = params.quotaBucket;
+    this.limit = params.limit;
+    this.requested = params.requested;
+    this.remaining = params.remaining;
+    this.resetsAt = params.resetsAt;
+    this.projectId = params.projectId;
+  }
+}
+
